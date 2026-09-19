@@ -91,6 +91,22 @@ by the cache's `Clock`). A `ttl` of 0 or less means "never expires".
 
 Removes `key` from the cache, if present. No-op otherwise.
 
+### `func (c *Cache[K, V]) Peek(key K) (V, bool)`
+
+Looks up `key` without side effects: it does not refresh the entry's
+recency, does not count toward `Stats`, and does not evict an expired entry
+(an expired entry is reported as absent). Useful for inspection where a read
+must not change which entry is evicted next.
+
+### `func (c *Cache[K, V]) Keys() []K`
+
+Returns the keys of all live (non-expired) entries from most- to
+least-recently-used, as a copy. Like `Peek`, it has no side effects.
+
+### `func (c *Cache[K, V]) Clear()`
+
+Removes every entry. Capacity and the `Stats` counters are unchanged.
+
 ### `func (c *Cache[K, V]) Len() int`
 
 Returns the number of entries currently stored, including any whose

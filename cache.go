@@ -220,3 +220,54 @@ func (c *Cache[K, V]) Stats() (hits, misses int) {
 
 	return c.hits, c.misses
 }
+
+// Peek looks up key without affecting the cache: it does not refresh the
+// entry's recency, does not count as a hit or a miss in Stats, and does not
+// evict an expired entry. It returns the zero value of V and false if key is
+// absent or has expired. Use it for inspection or debugging where a read
+// must not change which entry is evicted next.
+func (c *Cache[K, V]) Peek(key K) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	el, ok := c.items[key]
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	ent := el.Value.(*entry[K, V])
+	if ent.expired(c.clock.Now()) {
+		var zero V
+		return zero, false
+	}
+	return ent.value, true
+}
+
+// Keys returns the keys of all live (non-expired) entries ordered from
+// most-recently-used to least-recently-used. Like Peek it has no side
+// effects: recency, Stats and expired entries are left untouched. The
+// returned slice is a copy the caller may modify freely.
+func (c *Cache[K, V]) Keys() []K {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.clock.Now()
+	keys := make([]K, 0, c.ll.Len())
+	for el := c.ll.Front(); el != nil; el = el.Next() {
+		ent := el.Value.(*entry[K, V])
+		if !ent.expired(now) {
+			keys = append(keys, ent.key)
+		}
+	}
+	return keys
+}
+
+// Clear removes every entry from the cache. The capacity and the hit/miss
+// counters reported by Stats are left unchanged.
+func (c *Cache[K, V]) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.ll.Init()
+	c.items = make(map[K]*list.Element)
+}

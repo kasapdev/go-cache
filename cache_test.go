@@ -223,3 +223,89 @@ func TestConcurrency(t *testing.T) {
 		t.Errorf("Stats() = (%d, %d), want non-negative", hits, misses)
 	}
 }
+
+func TestPeek_DoesNotChangeRecencyOrStats(t *testing.T) {
+	c := New[string, int](2)
+	c.Put("a", 1)
+	c.Put("b", 2) // order: b, a  (a is LRU)
+
+	if v, ok := c.Peek("a"); !ok || v != 1 {
+		t.Fatalf("Peek(a) = %d, %v; want 1, true", v, ok)
+	}
+	if _, ok := c.Peek("missing"); ok {
+		t.Fatal("Peek(missing) should report absent")
+	}
+	if hits, misses := c.Stats(); hits != 0 || misses != 0 {
+		t.Fatalf("Peek must not touch stats, got hits=%d misses=%d", hits, misses)
+	}
+
+	// If Peek had refreshed "a", inserting "c" would evict "b" instead.
+	c.Put("c", 3)
+	if _, ok := c.Get("a"); ok {
+		t.Fatal("a should have been evicted: Peek must not promote it")
+	}
+	if _, ok := c.Get("b"); !ok {
+		t.Fatal("b should still be present")
+	}
+}
+
+func TestPeek_ExpiredEntryIsAbsentButNotEvicted(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	c := NewWithClock[string, int](2, clock)
+	c.PutWithTTL("a", 1, time.Second)
+	clock.Advance(2 * time.Second)
+
+	if _, ok := c.Peek("a"); ok {
+		t.Fatal("Peek should treat an expired entry as absent")
+	}
+	if c.Len() != 1 {
+		t.Fatalf("Peek must not evict; Len = %d, want 1", c.Len())
+	}
+}
+
+func TestKeys_OrderedMRUFirstAndSkipsExpired(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	c := NewWithClock[string, int](5, clock)
+	c.Put("a", 1)
+	c.PutWithTTL("b", 2, time.Second)
+	c.Put("c", 3)
+	c.Get("a") // order: a, c, b
+
+	clock.Advance(2 * time.Second) // b expires
+	got := c.Keys()
+	want := []string{"a", "c"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Keys() = %v, want %v", got, want)
+	}
+
+	got[0] = "mutated"
+	if again := c.Keys(); again[0] != "a" {
+		t.Fatalf("Keys must return a copy; cache saw %v", again)
+	}
+}
+
+func TestClear_EmptiesCacheButKeepsStatsAndCapacity(t *testing.T) {
+	c := New[string, int](2)
+	c.Put("a", 1)
+	c.Get("a")
+	c.Get("nope")
+
+	c.Clear()
+	if c.Len() != 0 {
+		t.Fatalf("Len after Clear = %d, want 0", c.Len())
+	}
+	if _, ok := c.Peek("a"); ok {
+		t.Fatal("a should be gone after Clear")
+	}
+	if hits, misses := c.Stats(); hits != 1 || misses != 1 {
+		t.Fatalf("Clear must keep stats, got hits=%d misses=%d", hits, misses)
+	}
+
+	// Still fully usable, capacity unchanged.
+	c.Put("x", 1)
+	c.Put("y", 2)
+	c.Put("z", 3)
+	if c.Len() != 2 {
+		t.Fatalf("capacity should still be 2, Len = %d", c.Len())
+	}
+}
